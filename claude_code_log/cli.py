@@ -3,11 +3,65 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
+import datetime
 
 import click
 
 from .converter import convert_jsonl_to_html, process_projects_hierarchy
+
+
+def list_available_projects(projects_dir: Path) -> None:
+    """List all available projects with their transcript counts."""
+    project_infos: List[Dict[str, Any]] = []
+    
+    for project_dir in sorted(projects_dir.iterdir()):
+        if project_dir.is_dir():
+            jsonl_files = list(project_dir.glob("*.jsonl"))
+            if jsonl_files:
+                # Get total size of JSONL files
+                total_size = sum(f.stat().st_size for f in jsonl_files)
+                total_size_mb = total_size / 1024 / 1024
+                
+                # Get last modified time
+                last_modified = max(f.stat().st_mtime for f in jsonl_files)
+                
+                # Reverse the conversion to get original path
+                project_name = project_dir.name
+                if project_name.startswith("-"):
+                    # Remove leading dash and replace remaining dashes with slashes
+                    original_path = "/" + project_name[1:].replace("-", "/")
+                    # Clean up any double slashes
+                    while "//" in original_path:
+                        original_path = original_path.replace("//", "/")
+                else:
+                    original_path = project_name
+                
+                project_infos.append({
+                    "name": project_name,
+                    "original_path": original_path,
+                    "transcript_count": len(jsonl_files),
+                    "size_mb": total_size_mb,
+                    "last_modified": last_modified,
+                })
+    
+    if not project_infos:
+        click.echo("No projects with transcripts found.")
+        return
+    
+    # Display projects
+    click.echo(f"\nFound {len(project_infos)} projects with transcripts:\n")
+    
+    # Sort by last modified (most recent first)
+    project_infos.sort(key=lambda x: x["last_modified"], reverse=True)
+    
+    for info in project_infos:
+        last_mod_date = datetime.datetime.fromtimestamp(info["last_modified"]).strftime("%Y-%m-%d %H:%M")
+        click.echo(f"  {info['original_path']}")
+        click.echo(f"    Directory: {info['name']}")
+        click.echo(f"    Transcripts: {info['transcript_count']} files ({info['size_mb']:.1f} MB)")
+        click.echo(f"    Last modified: {last_mod_date}")
+        click.echo()
 
 
 def convert_project_path_to_claude_dir(input_path: Path) -> Path:
@@ -57,6 +111,11 @@ def convert_project_path_to_claude_dir(input_path: Path) -> Path:
     is_flag=True,
     help="Process all projects in ~/.claude/projects/ hierarchy and create linked HTML files",
 )
+@click.option(
+    "--list-projects",
+    is_flag=True,
+    help="List all available projects in ~/.claude/projects/",
+)
 def main(
     input_path: Optional[Path],
     output: Optional[Path],
@@ -64,12 +123,31 @@ def main(
     from_date: Optional[str],
     to_date: Optional[str],
     all_projects: bool,
+    list_projects: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML.
 
-    INPUT_PATH: Path to a Claude transcript JSONL file, directory containing JSONL files, or project path to convert. If not provided, defaults to ~/.claude/projects/ and --all-projects is used.
+    INPUT_PATH: Path to a Claude transcript JSONL file, directory containing JSONL files, or project path to convert. 
+    
+    Project paths can be specified in two ways:
+    - Original filesystem path: /Users/alpha/workspace/project
+    - Claude directory name: ~/.claude/projects/-Users-alpha-workspace-project
+    
+    If not provided, defaults to ~/.claude/projects/ and --all-projects is used.
+    
+    Use --list-projects to see all available projects.
     """
     try:
+        # Handle --list-projects flag
+        if list_projects:
+            projects_dir = Path.home() / ".claude" / "projects"
+            if not projects_dir.exists():
+                click.echo("No projects directory found at ~/.claude/projects/", err=True)
+                sys.exit(1)
+            
+            list_available_projects(projects_dir)
+            return
+
         # Handle default case - process all projects hierarchy if no input path and --all-projects flag
         if input_path is None:
             input_path = Path.home() / ".claude" / "projects"
